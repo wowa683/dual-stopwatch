@@ -21,7 +21,8 @@
 
 ## Скачать
 
-Готовый `Секундомер.exe` доступен в разделе **Releases** репозитория.
+Готовый [`DualStopwatch.exe`](https://github.com/wowa683/dual-stopwatch/releases/latest/download/DualStopwatch.exe)
+доступен в разделе **Releases** репозитория.
 
 Приложение рассчитано на Windows 10/11 с .NET Framework 4.8.
 
