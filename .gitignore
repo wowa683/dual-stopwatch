@@ -1,0 +1,33 @@
+# Build output
+*.exe
+*.pdb
+bin/
+obj/
+
+# Visual Studio / Rider
+.vs/
+.idea/
+*.user
+*.suo
+
+# Local application data and temporary files
+stopwatch_state.txt
+stopwatch_idle_settings.txt
+*.tmp
+*.log
+
+# Signing material and credentials must never be committed
+*.p12
+*.pfx
+*.jks
+*.keystore
+*credentials*.txt
+*secret*
+
+# Unrelated local work directory
+xiaomi-clock-clone-work/
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
