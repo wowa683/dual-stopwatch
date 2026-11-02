@@ -13,6 +13,7 @@ obj/
 # Local application data and temporary files
 stopwatch_state.txt
 stopwatch_idle_settings.txt
+stopwatch_color_settings.txt
 *.tmp
 *.log
 

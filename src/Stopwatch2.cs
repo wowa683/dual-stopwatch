@@ -255,10 +255,13 @@ namespace DualStopwatch
         private readonly Run mainRun;
         private readonly Button toggleButton;
         private readonly Path toggleIcon;
-        private readonly SolidColorBrush accentBrush;
-        private readonly SolidColorBrush activeBorderBrush;
+        private SolidColorBrush accentBrush;
+        private SolidColorBrush activeBorderBrush;
+        private readonly Border accentStripe;
         private bool isActive;
         private bool pausedByIdle;
+
+        public Color AccentColor { get; private set; }
 
         public event EventHandler UserToggled;
 
@@ -266,6 +269,7 @@ namespace DualStopwatch
 
         public BoardCard(string index, Color accent)
         {
+            AccentColor = accent;
             accentBrush = Freeze(new SolidColorBrush(accent));
             activeBorderBrush = Palette.Alpha(accent, 0x90);
 
@@ -285,7 +289,7 @@ namespace DualStopwatch
             content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             // Цветная метка табло
-            var stripe = new Border
+            accentStripe = new Border
             {
                 Width = 3,
                 Height = 16,
@@ -295,7 +299,7 @@ namespace DualStopwatch
                 Margin = new Thickness(0, 0, 4, 0),
                 ToolTip = "Табло " + index
             };
-            content.Children.Add(stripe);
+            content.Children.Add(accentStripe);
 
             // Время без долей секунд, масштабируется под ширину
             mainRun = new Run("00:00:00")
@@ -417,6 +421,19 @@ namespace DualStopwatch
         {
             pausedByIdle = false;
             board.Reset();
+            Refresh();
+        }
+
+        /// <summary>Меняет основной цвет табло без сброса времени.</summary>
+        public void SetAccent(Color accent)
+        {
+            AccentColor = accent;
+            accentBrush = Freeze(new SolidColorBrush(accent));
+            activeBorderBrush = Palette.Alpha(accent, 0x90);
+
+            accentStripe.Background = accentBrush;
+            toggleButton.Background = accentBrush;
+            BorderBrush = isActive ? activeBorderBrush : Palette.CardBorder;
             Refresh();
         }
 
@@ -606,10 +623,14 @@ namespace DualStopwatch
         private DispatcherTimer idleTimer;
         private bool idlePauseApplied;
         private int idleMinutes = 1;
+        private Color accentColor1 = Palette.AccentCyanColor;
+        private Color accentColor2 = Palette.AccentAmberColor;
+        private SettingsWindow settingsWindow;
 
         private const string StateDirName = "Stopwatch2";
         private const string StateFileName = "stopwatch_state.txt";
         private const string IdleSettingsFileName = "stopwatch_idle_settings.txt";
+        private const string ColorSettingsFileName = "stopwatch_color_settings.txt";
 
         public MainWindow()
         {
@@ -628,8 +649,9 @@ namespace DualStopwatch
             UseLayoutRounding = true;
             SnapsToDevicePixels = true;
 
-            card1 = new BoardCard("1", Palette.AccentCyanColor);
-            card2 = new BoardCard("2", Palette.AccentAmberColor);
+            LoadAccentColors();
+            card1 = new BoardCard("1", accentColor1);
+            card2 = new BoardCard("2", accentColor2);
 
             card1.UserToggled += delegate(object sender, EventArgs e) { ToggleActive(0); };
             card2.UserToggled += delegate(object sender, EventArgs e) { ToggleActive(1); };
@@ -686,7 +708,9 @@ namespace DualStopwatch
                 HorizontalAlignment = HorizontalAlignment.Right
             };
 
-            var settingsButton = MakeWindowButton("\uE7E8", "Настройки");
+            // Segoe Fluent Icons: Settings — хорошо различимая шестерёнка.
+            var settingsButton = MakeWindowButton("\uE713", "Настройки");
+            settingsButton.FontSize = 10.5;
             settingsButton.Margin = new Thickness(0, 0, 0, 3);
             settingsButton.Click += delegate { OpenSettings(); };
             windowButtons.Children.Add(settingsButton);
@@ -821,6 +845,7 @@ namespace DualStopwatch
         {
             SaveState();
             SaveIdleSettings();
+            SaveAccentColors();
             timer.Stop();
             if (idleTimer != null)
             {
@@ -892,29 +917,32 @@ namespace DualStopwatch
 
         private void OpenSettings()
         {
-            string idleSettingsPath = System.IO.Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Stopwatch2",
-                "stopwatch_idle_settings.txt");
-            var settings = new SettingsWindow(idleMinutes, idleSettingsPath);
-            settings.Closed += delegate(object sender, EventArgs e)
+            if (settingsWindow != null)
             {
-                int minutes = 1;
-                try
+                settingsWindow.Activate();
+                return;
+            }
+
+            settingsWindow = new SettingsWindow(idleMinutes, accentColor1, accentColor2);
+            settingsWindow.Owner = this;
+            settingsWindow.Closed += delegate(object sender, EventArgs e)
+            {
+                SettingsWindow closedWindow = (SettingsWindow)sender;
+                if (closedWindow.Accepted)
                 {
-                    if (System.IO.File.Exists(idleSettingsPath))
-                    {
-                        int.TryParse(System.IO.File.ReadAllText(idleSettingsPath), out minutes);
-                    }
+                    idleMinutes = closedWindow.SelectedIdleMinutes;
+                    accentColor1 = closedWindow.SelectedColor1;
+                    accentColor2 = closedWindow.SelectedColor2;
+
+                    card1.SetAccent(accentColor1);
+                    card2.SetAccent(accentColor2);
+                    SaveIdleSettings();
+                    SaveAccentColors();
                 }
-                catch
-                {
-                }
-                idleMinutes = minutes;
-                idleTimer.Interval = TimeSpan.FromMilliseconds(3000);
+                settingsWindow = null;
             };
-            settings.Show();
-            PositionSettingsWindow(settings);
+            settingsWindow.Show();
+            PositionSettingsWindow(settingsWindow);
         }
 
         private void PositionSettingsWindow(Window window)
@@ -984,12 +1012,111 @@ namespace DualStopwatch
                     IdleSettingsFileName);
                 if (System.IO.File.Exists(path))
                 {
-                    int.TryParse(System.IO.File.ReadAllText(path), out idleMinutes);
+                    int parsed;
+                    if (int.TryParse(System.IO.File.ReadAllText(path), out parsed) &&
+                        (parsed == 1 || parsed == 2 || parsed == 3 || parsed == 5 || parsed == 10))
+                    {
+                        idleMinutes = parsed;
+                    }
                 }
             }
             catch
             {
             }
+        }
+
+        private void LoadAccentColors()
+        {
+            try
+            {
+                string path = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    StateDirName,
+                    ColorSettingsFileName);
+                if (!System.IO.File.Exists(path))
+                {
+                    return;
+                }
+
+                string[] values = System.IO.File.ReadAllText(path).Split('|');
+                Color parsed;
+                if (values.Length > 0 && TryParseColor(values[0], out parsed))
+                {
+                    accentColor1 = parsed;
+                }
+                if (values.Length > 1 && TryParseColor(values[1], out parsed))
+                {
+                    accentColor2 = parsed;
+                }
+            }
+            catch
+            {
+                // При повреждённом файле остаются стандартные голубой и оранжевый.
+            }
+        }
+
+        private void SaveAccentColors()
+        {
+            try
+            {
+                string dir = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    StateDirName);
+                if (!System.IO.Directory.Exists(dir))
+                {
+                    System.IO.Directory.CreateDirectory(dir);
+                }
+
+                System.IO.File.WriteAllText(
+                    System.IO.Path.Combine(dir, ColorSettingsFileName),
+                    ColorToHex(accentColor1) + "|" + ColorToHex(accentColor2));
+            }
+            catch
+            {
+                // Настройка цвета не критична для работы секундомеров.
+            }
+        }
+
+        private static string ColorToHex(Color color)
+        {
+            return string.Format(
+                CultureInfo.InvariantCulture,
+                "#{0:X2}{1:X2}{2:X2}",
+                color.R,
+                color.G,
+                color.B);
+        }
+
+        private static bool TryParseColor(string value, out Color color)
+        {
+            color = Colors.Transparent;
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+
+            string hex = value.Trim();
+            if (hex.StartsWith("#", StringComparison.Ordinal))
+            {
+                hex = hex.Substring(1);
+            }
+            if (hex.Length != 6)
+            {
+                return false;
+            }
+
+            byte red;
+            byte green;
+            byte blue;
+            if (!byte.TryParse(hex.Substring(0, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out red) ||
+                !byte.TryParse(hex.Substring(2, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out green) ||
+                !byte.TryParse(hex.Substring(4, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out blue))
+            {
+                return false;
+            }
+
+            color = Color.FromRgb(red, green, blue);
+            return true;
         }
 
         private void SaveState()
@@ -1018,87 +1145,311 @@ namespace DualStopwatch
 
         internal sealed class SettingsWindow : Window
         {
-            private ComboBox combo;
-
-            public SettingsWindow(int initialMinutes, string stateFilePath)
+            private sealed class AccentOption
             {
-                Width = 180;
-                Height = 96;
+                public string Name;
+                public Color Color;
+
+                public AccentOption(string name, Color color)
+                {
+                    Name = name;
+                    Color = color;
+                }
+            }
+
+            private static readonly int[] MinutesValues = new int[] { 1, 2, 3, 5, 10 };
+            private static readonly string[] MinuteLabels = new string[]
+            {
+                "1 минута", "2 минуты", "3 минуты", "5 минут", "10 минут"
+            };
+
+            private static readonly AccentOption[] AccentOptions = new AccentOption[]
+            {
+                new AccentOption("Голубой", Palette.AccentCyanColor),
+                new AccentOption("Оранжевый", Palette.AccentAmberColor),
+                new AccentOption("Зелёный", Color.FromRgb(0x58, 0xD6, 0x8D)),
+                new AccentOption("Фиолетовый", Color.FromRgb(0xA9, 0x8B, 0xFF)),
+                new AccentOption("Розовый", Color.FromRgb(0xFF, 0x7E, 0xB6)),
+                new AccentOption("Красный", Color.FromRgb(0xFF, 0x6B, 0x6B)),
+                new AccentOption("Синий", Color.FromRgb(0x6E, 0xA8, 0xFF)),
+                new AccentOption("Жёлтый", Color.FromRgb(0xFF, 0xD1, 0x66))
+            };
+
+            private readonly ComboBox idleCombo;
+            private readonly ComboBox color1Combo;
+            private readonly ComboBox color2Combo;
+
+            public bool Accepted { get; private set; }
+            public int SelectedIdleMinutes { get; private set; }
+            public Color SelectedColor1 { get; private set; }
+            public Color SelectedColor2 { get; private set; }
+
+            public SettingsWindow(int initialMinutes, Color initialColor1, Color initialColor2)
+            {
+                Title = "Настройки";
+                Width = 310;
+                Height = 218;
                 WindowStyle = WindowStyle.None;
                 ResizeMode = ResizeMode.NoResize;
+                WindowStartupLocation = WindowStartupLocation.Manual;
+                ShowInTaskbar = false;
                 Background = Palette.WindowBackground;
                 FontFamily = new FontFamily("Segoe UI");
                 FontSize = 11;
                 Topmost = true;
-                Content = BuildContent(initialMinutes, stateFilePath);
+
+                SelectedIdleMinutes = initialMinutes;
+                SelectedColor1 = initialColor1;
+                SelectedColor2 = initialColor2;
+
+                idleCombo = CreateIdleCombo(initialMinutes);
+                color1Combo = CreateColorCombo(initialColor1);
+                color2Combo = CreateColorCombo(initialColor2);
+                Content = BuildContent();
             }
 
-            private object BuildContent(int initialMinutes, string stateFilePath)
+            protected override void OnPreviewKeyDown(KeyEventArgs e)
+            {
+                base.OnPreviewKeyDown(e);
+                if (e.Key == Key.Escape)
+                {
+                    e.Handled = true;
+                    Close();
+                }
+            }
+
+            private object BuildContent()
             {
                 var border = new Border
                 {
                     Background = Palette.WindowBackground,
                     BorderBrush = Palette.WindowBorder,
                     BorderThickness = new Thickness(1),
-                    CornerRadius = new CornerRadius(8),
-                    Width = 180,
-                    Height = 96
+                    CornerRadius = new CornerRadius(9),
+                    Padding = new Thickness(12)
                 };
-                var panel = new StackPanel();
-                panel.HorizontalAlignment = HorizontalAlignment.Center;
-                panel.VerticalAlignment = VerticalAlignment.Center;
-                panel.Children.Add(new TextBlock
+
+                var root = new Grid();
+                root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                root.RowDefinitions.Add(new RowDefinition());
+                root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+                var header = new Grid
                 {
-                    Text = "Пауза при простое",
-                    FontFamily = new FontFamily("Segoe UI"),
-                    FontSize = 11,
-                    Foreground = Palette.TextSecondary,
-                    HorizontalAlignment = HorizontalAlignment.Center
-                });
-                combo = new ComboBox
-                {
-                    Width = 110,
-                    FontFamily = new FontFamily("Segoe UI"),
-                    FontSize = 12,
-                    Background = Brushes.White,
-                    Foreground = Brushes.Black,
-                    BorderBrush = Palette.ButtonBorder,
-                    HorizontalAlignment = HorizontalAlignment.Center
+                    Height = 26,
+                    Cursor = Cursors.SizeAll
                 };
-                combo.ItemsSource = new List<string> { "1 минута", "2 минуты", "3 минуты", "5 минут", "10 минут" };
-                int index = 0;
-                int[] minutesValues = new int[] { 1, 2, 3, 5, 10 };
-                for (int i = 0; i < minutesValues.Length; i++)
+                header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                header.ColumnDefinitions.Add(new ColumnDefinition());
+                header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                header.MouseLeftButtonDown += delegate(object sender, MouseButtonEventArgs e)
                 {
-                    if (minutesValues[i] == initialMinutes)
+                    if (e.ButtonState == MouseButtonState.Pressed)
                     {
-                        index = i;
+                        try
+                        {
+                            DragMove();
+                        }
+                        catch (InvalidOperationException)
+                        {
+                        }
+                    }
+                };
+
+                var gear = new TextBlock
+                {
+                    Text = "\uE713",
+                    FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
+                    FontSize = 14,
+                    Foreground = Palette.TextSecondary,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 0, 7, 0)
+                };
+                header.Children.Add(gear);
+
+                var title = new TextBlock
+                {
+                    Text = "Настройки",
+                    FontSize = 13,
+                    FontWeight = FontWeights.SemiBold,
+                    Foreground = Palette.TextPrimary,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                Grid.SetColumn(title, 1);
+                header.Children.Add(title);
+
+                var close = Ui.MakeButton("\uE8BB", new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"), 9,
+                    FontWeights.Normal, Brushes.Transparent, Palette.TextMuted, null, 6);
+                close.Width = 24;
+                close.Height = 24;
+                close.Cursor = Cursors.Hand;
+                close.ToolTip = "Закрыть без сохранения";
+                close.Click += delegate { Close(); };
+                Grid.SetColumn(close, 2);
+                header.Children.Add(close);
+
+                root.Children.Add(header);
+
+                var form = new Grid { Margin = new Thickness(0, 10, 0, 10) };
+                form.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(112) });
+                form.ColumnDefinitions.Add(new ColumnDefinition());
+                form.RowDefinitions.Add(new RowDefinition { Height = new GridLength(34) });
+                form.RowDefinitions.Add(new RowDefinition { Height = new GridLength(34) });
+                form.RowDefinitions.Add(new RowDefinition { Height = new GridLength(34) });
+
+                AddSettingRow(form, 0, "Автопауза", idleCombo);
+                AddSettingRow(form, 1, "Цвет табло 1", color1Combo);
+                AddSettingRow(form, 2, "Цвет табло 2", color2Combo);
+
+                Grid.SetRow(form, 1);
+                root.Children.Add(form);
+
+                var actions = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Right
+                };
+
+                var cancel = Ui.MakeButton("Отмена", new FontFamily("Segoe UI"), 11, FontWeights.Normal,
+                    Palette.Button, Palette.ButtonText, Palette.ButtonBorder, 7);
+                cancel.Width = 72;
+                cancel.Height = 27;
+                cancel.Margin = new Thickness(0, 0, 6, 0);
+                cancel.Click += delegate { Close(); };
+                actions.Children.Add(cancel);
+
+                var apply = Ui.MakeButton("Применить", new FontFamily("Segoe UI"), 11, FontWeights.SemiBold,
+                    Palette.AccentCyan, Palette.Ink, null, 7);
+                apply.Width = 88;
+                apply.Height = 27;
+                apply.Click += delegate
+                {
+                    int index = idleCombo.SelectedIndex;
+                    SelectedIdleMinutes = index >= 0 && index < MinutesValues.Length
+                        ? MinutesValues[index]
+                        : 1;
+                    SelectedColor1 = GetSelectedColor(color1Combo, Palette.AccentCyanColor);
+                    SelectedColor2 = GetSelectedColor(color2Combo, Palette.AccentAmberColor);
+                    Accepted = true;
+                    Close();
+                };
+                actions.Children.Add(apply);
+
+                Grid.SetRow(actions, 2);
+                root.Children.Add(actions);
+
+                border.Child = root;
+                return border;
+            }
+
+            private static ComboBox CreateIdleCombo(int initialMinutes)
+            {
+                ComboBox combo = CreateBaseCombo();
+                combo.ItemsSource = new List<string>(MinuteLabels);
+
+                int selected = 0;
+                for (int i = 0; i < MinutesValues.Length; i++)
+                {
+                    if (MinutesValues[i] == initialMinutes)
+                    {
+                        selected = i;
                         break;
                     }
                 }
-                combo.SelectedIndex = index;
+                combo.SelectedIndex = selected;
+                return combo;
+            }
 
-                var ok = Ui.MakeButton("OK", new FontFamily("Segoe UI"), 11, FontWeights.Normal, Palette.Button, Palette.ButtonText, Palette.ButtonBorder, 7);
-                ok.Width = 60;
-                ok.Height = 24;
-                ok.HorizontalAlignment = HorizontalAlignment.Center;
-                ok.Click += delegate(object sender, RoutedEventArgs e)
+            private static ComboBox CreateColorCombo(Color initialColor)
+            {
+                ComboBox combo = CreateBaseCombo();
+                int selected = 0;
+
+                for (int i = 0; i < AccentOptions.Length; i++)
                 {
-                    int minutes = minutesValues[combo.SelectedIndex];
-                    try
+                    AccentOption option = AccentOptions[i];
+                    var content = new StackPanel
                     {
-                        System.IO.File.WriteAllText(stateFilePath, minutes.ToString());
-                    }
-                    catch
+                        Orientation = Orientation.Horizontal,
+                        VerticalAlignment = VerticalAlignment.Center
+                    };
+                    content.Children.Add(new Border
                     {
-                    }
-                    Close();
-                };
+                        Width = 14,
+                        Height = 14,
+                        CornerRadius = new CornerRadius(3),
+                        Background = new SolidColorBrush(option.Color),
+                        BorderBrush = new SolidColorBrush(Color.FromRgb(0x70, 0x70, 0x70)),
+                        BorderThickness = new Thickness(1),
+                        Margin = new Thickness(0, 0, 7, 0)
+                    });
+                    content.Children.Add(new TextBlock
+                    {
+                        Text = option.Name,
+                        Foreground = Brushes.Black,
+                        VerticalAlignment = VerticalAlignment.Center
+                    });
 
-                panel.Children.Add(combo);
-                panel.Children.Add(ok);
-                border.Child = panel;
-                return border;
+                    var item = new ComboBoxItem
+                    {
+                        Content = content,
+                        Tag = option.Color,
+                        Foreground = Brushes.Black,
+                        Padding = new Thickness(4, 2, 4, 2)
+                    };
+                    combo.Items.Add(item);
+
+                    if (option.Color == initialColor)
+                    {
+                        selected = i;
+                    }
+                }
+
+                combo.SelectedIndex = selected;
+                return combo;
+            }
+
+            private static ComboBox CreateBaseCombo()
+            {
+                return new ComboBox
+                {
+                    Height = 26,
+                    FontFamily = new FontFamily("Segoe UI"),
+                    FontSize = 11,
+                    Background = Brushes.White,
+                    Foreground = Brushes.Black,
+                    BorderBrush = Palette.ButtonBorder,
+                    VerticalContentAlignment = VerticalAlignment.Center,
+                    HorizontalAlignment = HorizontalAlignment.Stretch
+                };
+            }
+
+            private static void AddSettingRow(Grid form, int row, string label, ComboBox combo)
+            {
+                var text = new TextBlock
+                {
+                    Text = label,
+                    Foreground = Palette.TextSecondary,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 0, 8, 0)
+                };
+                Grid.SetRow(text, row);
+                form.Children.Add(text);
+
+                combo.Margin = new Thickness(0, 3, 0, 3);
+                Grid.SetRow(combo, row);
+                Grid.SetColumn(combo, 1);
+                form.Children.Add(combo);
+            }
+
+            private static Color GetSelectedColor(ComboBox combo, Color fallback)
+            {
+                ComboBoxItem item = combo.SelectedItem as ComboBoxItem;
+                if (item != null && item.Tag is Color)
+                {
+                    return (Color)item.Tag;
+                }
+                return fallback;
             }
         }
 
